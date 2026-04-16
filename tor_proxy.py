@@ -283,14 +283,15 @@ class FirewallManager:
                 # Cegah Tor masuk ke loop
                 meta skuid "{tor_uid}" accept
                 
+                # Wajib: Redirect DNS KELUAR sebelum bypass localhost, agar requests ke 127.0.0.1:53 tertangkap
+                {aturan_dns}
+                {aturan_pengecualian}
+                
                 # Bypass Antarmuka Lokal (Loopback) - Mengatasi Saran Prioritas 2 (Loop Bypass)
                 oifname "lo" accept
                 
                 # Bypass Jaringan Lokal (LAN)
                 ip daddr {{ 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }} accept
-                
-                {aturan_pengecualian}
-                {aturan_dns}
                 
                 # Alihkan seluruh TCP ke TransPort Tor
                 meta l4proto tcp redirect to :{TOR_TRANS_PORT}
@@ -334,8 +335,6 @@ class FirewallManager:
             ["iptables", "-F"],
             ["iptables", "-t", "nat", "-F"],
             ["iptables", "-t", "nat", "-A", "OUTPUT", "-m", "owner", "--uid-owner", tor_uid, "-j", "RETURN"],
-            # Bypass antarmuka Loopback (Mencegah loop ControlPort)
-            ["iptables", "-t", "nat", "-A", "OUTPUT", "-o", "lo", "-j", "RETURN"],
         ]
 
         if redirect_dns:
@@ -344,13 +343,16 @@ class FirewallManager:
                 ["iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-ports", str(TOR_DNS_PORT)]
             ])
 
-        jaringan_lokal = ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "127.0.0.0/8"]
-        for subnet in jaringan_lokal:
-            aturan.append(["iptables", "-t", "nat", "-A", "OUTPUT", "-d", subnet, "-j", "RETURN"])
-
         if port_pengecualian:
             aturan.append(["iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp", "-m", "multiport", "--dports", port_pengecualian, "-j", "RETURN"])
             UI.info(f"-> Pengecualian Port: {port_pengecualian}")
+
+        # Bypass antarmuka Loopback (Diletakkan SETELAH intercept DNS)
+        aturan.append(["iptables", "-t", "nat", "-A", "OUTPUT", "-o", "lo", "-j", "RETURN"])
+
+        jaringan_lokal = ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "127.0.0.0/8"]
+        for subnet in jaringan_lokal:
+            aturan.append(["iptables", "-t", "nat", "-A", "OUTPUT", "-d", subnet, "-j", "RETURN"])
 
         aturan.append(["iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp", "--syn", "-j", "REDIRECT", "--to-ports", str(TOR_TRANS_PORT)])
 
@@ -448,22 +450,23 @@ class TorManager:
     def tunggu_bootstrap(timeout=45):
         """Memanfaatkan pustaka Stem untuk verifikasi bootstrap yang lebih persis (Prioritas 3)."""
         UI.info("Menunggu Tor menyinkronkan Bootstrap...")
+        waktu_mulai = time.time()
         
         if STEM_AVAILABLE:
             UI.debug("Menggunakan pustaka Stem untuk mengawasi persentase bootstrap.")
-            try:
-                with Controller.from_port(port=TOR_CTRL_PORT) as controller:
-                    controller.authenticate()
-                    waktu_mulai = time.time()
-                    while time.time() - waktu_mulai < timeout:
+            while time.time() - waktu_mulai < timeout:
+                try:
+                    with Controller.from_port(port=TOR_CTRL_PORT) as controller:
+                        controller.authenticate()
                         fase = controller.get_info("status/bootstrap-phase")
                         UI.debug(f"Status Tor: {fase}")
                         if "PROGRESS=100" in fase:
                             UI.sukses("Tor Bootstrap selesai 100%.")
                             return True
-                        time.sleep(1)
-            except Exception as e:
-                UI.peringatan(f"Verifikasi Stem gagal ({e}). Fallback ke utilitas socket...")
+                except Exception as e:
+                    UI.debug(f"Stem belum dapat terhubung (menunggu Tor siap): {e}")
+                time.sleep(1)
+            UI.peringatan("Verifikasi Stem Timeout. Fallback ke utilitas socket...")
 
         # Fallback SS (Socket Statistics)
         waktu_mulai = time.time()
