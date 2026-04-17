@@ -710,7 +710,6 @@ def main():
     parser.add_argument('--no-dns-redirect', action='store_true')
     parser.add_argument('--use-bridges', action='store_true')
     parser.add_argument('--wait', type=int, default=5)
-    # Di dalam fungsi main(), ubah argumen -c menjadi seperti ini:
     parser.add_argument('-c', '--country', action='store_true', help='Tampilkan menu interaktif untuk memilih negara Exit Node')
     
     # Opsi Verbose (Saran Prioritas 3)
@@ -731,8 +730,21 @@ def main():
     elif args.restart: hentikan_layanan(); time.sleep(2); mulai_layanan(args)
     elif args.newnym: 
         SistemUtils.cek_root()
+        # Modifikasi: Cek apakah user juga menekan tombol -c
+        if args.country:
+            UI.info("Permintaan modifikasi lokasi negara terdeteksi.")
+            country_code = pilih_negara_exit_node()
+            TorManager.konfigurasi_torrc(args.use_bridges, country_code)
+            
+            # Melakukan RELOAD tor agar membaca aturan ExitNodes yg baru (tanpa memutuskan iptables)
+            UI.info("Memuat ulang konfigurasi daemon Tor (SIGHUP)...")
+            SistemUtils.jalankan_perintah(["systemctl", "reload", "tor"], abaikan_error=True)
+            time.sleep(2) # Beri jeda 2 detik agar Tor selesai membaca konfigurasi
+            
+        # Tetap panggil NEWNYM agar sirkuit yang masih nyangkut di negara lama langsung diputus
         if TorManager.ganti_identitas(args.wait):
             print(f"\n  {Warna.KUNING}{Warna.BOLD}IP BARU : {LeakTester.dapatkan_ip_publik()}{Warna.RESET}\n")
+            
     elif args.test_leak: LeakTester.uji_kebocoran_rinci()
     elif args.cleanup: 
         SistemUtils.cek_root()
