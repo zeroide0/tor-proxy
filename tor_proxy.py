@@ -419,20 +419,39 @@ class TorManager:
         raise Exception("Numeric UID Tor tidak ditemukan.")
 
     @staticmethod
-    def konfigurasi_torrc(gunakan_bridges=False):
+    def konfigurasi_torrc(gunakan_bridges=False, country_code=None):
         konten = Path(TORRC_PATH).read_text() if Path(TORRC_PATH).exists() else ""
-        if MARKER_BEGIN in konten: return
+        if MARKER_BEGIN in konten: 
+            TorManager.bersihkan_konfigurasi_torrc()
 
-        blok = TORRC_CONFIG_BLOCK
+        blok_list = [
+            MARKER_BEGIN,
+            "# Konfigurasi otomatis Tor-Proxy. Jangan diedit manual.",
+            "VirtualAddrNetwork 10.192.0.0/10",
+            "AutomapHostsOnResolve 1",
+            f"TransPort {TOR_TRANS_PORT}",
+            f"DNSPort {TOR_DNS_PORT}",
+            f"ControlPort {TOR_CTRL_PORT}",
+            "CookieAuthentication 1"
+        ]
+
+        if country_code:
+            code = country_code if country_code.startswith('{') else f"{{{country_code}}}"
+            blok_list.append(f"ExitNodes {code}")
+            blok_list.append("StrictNodes 1")
+
         if gunakan_bridges:
-            blok = blok.replace(MARKER_END, "UseBridges 1\n# Tambahkan list Bridge Anda di bawah ini\n" + MARKER_END)
+            blok_list.append("UseBridges 1\n# Tambahkan list Bridge Anda di bawah ini")
+
+        blok_list.append(MARKER_END)
+        blok = "\n".join(blok_list)
 
         try:
             with open(TORRC_PATH, 'a') as f: f.write("\n" + blok)
             UI.sukses("Konfigurasi Tor-Proxy berhasil ditulis ke torrc.")
         except Exception as e:
             raise Exception(f"Gagal menulis ke torrc: {e}")
-
+        
     @staticmethod
     def bersihkan_konfigurasi_torrc():
         if not Path(TORRC_PATH).exists(): return
@@ -599,12 +618,20 @@ def tangani_interupsi(sig, frame):
 def mulai_layanan(args):
     SistemUtils.cek_root()
     SistemUtils.cek_konflik()
+
+    # Menambahkan fungsi pemilihan exit node
+    country_code = None
+    if args.country:
+        country_code = pilih_negara_exit_node()
+
     UI.tampilkan_peringatan_awal()
     UI.header(f"MEMULAI TOR PROXY v{VERSION}")
     
     pasang_lock_file()
     try:
-        TorManager.konfigurasi_torrc(args.use_bridges)
+        # Mengirimkan country_code ke konfigurasi
+        TorManager.konfigurasi_torrc(args.use_bridges, country_code) 
+        
         UI.info("Merestart layanan background Tor...")
         SistemUtils.jalankan_perintah(["systemctl", "restart", "tor"])
         if not TorManager.tunggu_bootstrap(): raise Exception("Tor Bootstrap Timeout.")
@@ -628,6 +655,40 @@ def hentikan_layanan():
     prosedur_rollback_darurat()
     print(f"\n  {Warna.KUNING}{Warna.BOLD}IP ASLI ANDA : {LeakTester.dapatkan_ip_publik()}{Warna.RESET}\n")
 
+def pilih_negara_exit_node():
+    daftar_negara = {
+        "1": ("Amerika Serikat (US)", "us"),
+        "2": ("Jepang (JP)", "jp"),
+        "3": ("Jerman (DE)", "de"),
+        "4": ("Belanda (NL)", "nl"),
+        "5": ("Inggris (GB)", "gb"),
+        "6": ("Kanada (CA)", "ca"),
+        "7": ("Singapura (SG)", "sg"),
+        "8": ("Swiss (CH)", "ch"),
+        "9": ("Australia (AU)", "au"),
+        "0": ("Acak / Default Tor", None)
+    }
+
+    print(f"\n  {Warna.CYAN}{Warna.BOLD}=== PILIH NEGARA EXIT NODE ==={Warna.RESET}")
+    for key, (nama, _) in daftar_negara.items():
+        print(f"    [{key}] {nama}")
+
+    while True:
+        try:
+            pilihan = input(f"\n  {Warna.KUNING}Masukkan angka pilihan Anda (0-9): {Warna.RESET}").strip()
+            if pilihan in daftar_negara:
+                nama, kode = daftar_negara[pilihan]
+                if kode:
+                    UI.info(f"Anda memilih Exit Node: {nama} {{{kode}}}")
+                else:
+                    UI.info("Anda memilih Exit Node Acak (Default Tor).")
+                return kode
+            else:
+                print(f"  {Warna.MERAH}[!] Pilihan tidak valid, silakan coba lagi.{Warna.RESET}")
+        except KeyboardInterrupt:
+            print(f"\n  {Warna.MERAH}[!] Dibatalkan oleh pengguna.{Warna.RESET}")
+            sys.exit(1)
+
 # ==============================================================================
 # 9. MAIN ARGUMENT PARSER
 # ==============================================================================
@@ -649,6 +710,8 @@ def main():
     parser.add_argument('--no-dns-redirect', action='store_true')
     parser.add_argument('--use-bridges', action='store_true')
     parser.add_argument('--wait', type=int, default=5)
+    # Di dalam fungsi main(), ubah argumen -c menjadi seperti ini:
+    parser.add_argument('-c', '--country', action='store_true', help='Tampilkan menu interaktif untuk memilih negara Exit Node')
     
     # Opsi Verbose (Saran Prioritas 3)
     parser.add_argument('-v', '--verbose', action='store_true', help='Tampilkan log eksekusi teknis tingkat lanjut')
