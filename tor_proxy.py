@@ -316,6 +316,14 @@ class FirewallManager:
                 # Tolak semua paket nyasar (UDP, ICMP non-standar, dll) yang tidak dialihkan
                 reject
             }}
+
+            # === TAMBAHAN BARU: BLOKIR INPUT IPv6 ===
+            chain filter_in {{
+                type filter hook input priority filter; policy accept;
+                
+                # Blokir mutlak semua lalu lintas IPv6 yang mencoba masuk ke mesin
+                meta nfproto ipv6 drop
+            }}
         }}
         """
         
@@ -373,9 +381,12 @@ class FirewallManager:
 
         for baris in aturan: SistemUtils.jalankan_perintah(baris)
 
+        # === PERBAIKAN: BLOKIR SEMUA JALUR IPv6 ===
         SistemUtils.jalankan_perintah(["ip6tables", "-F"])
+        SistemUtils.jalankan_perintah(["ip6tables", "-P", "INPUT", "DROP"])   # Tambahan Baru
+        SistemUtils.jalankan_perintah(["ip6tables", "-P", "FORWARD", "DROP"]) # Tambahan Baru
         SistemUtils.jalankan_perintah(["ip6tables", "-P", "OUTPUT", "DROP"])
-        UI.sukses("Firewall Iptables diterapkan (Loopback Bypassed & ICMP Dropped).")
+        UI.sukses("Firewall Iptables diterapkan (Loopback Bypassed & ICMP Dropped, IPv6 KILLED).")
 
 
 # ==============================================================================
